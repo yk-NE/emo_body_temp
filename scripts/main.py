@@ -27,6 +27,7 @@ import argparse
 from emo import emo_send
 #other
 from bodytemp import *
+from Timer import *
 
 
 global END
@@ -80,15 +81,15 @@ async def main(device):
             (0x01, KonashiGpio.PinConfig(KonashiGpio.PinDirection.INPUT, KonashiGpio.PinPull.NONE, True)),
         ])
 
-        # set analog input callback
-        #def Ainput_cb(pin, val):
-        #    logging.info("Ain{}: {:.2f}V".format(pin, val))
-        #device.io.analog.set_input_cb(Ainput_cb)
-
-        # setup ADC read period to 0.5s, ref to VDD (3.3V) and enable all pins as input
-        #await device.io.analog.config_adc_period(0.5)
-        #await device.io.analog.config_adc_ref(KonashiAnalog.AdcRef.REF_VDD)
-        #await device.io.analog.config_pins([(0x07, KonashiAnalog.PinConfig(True, KonashiAnalog.PinDirection.INPUT, True))])
+        #人感センサ設定
+        global Prec
+        Prec=False
+        def presence_cb(pres):#人感センサー
+            global Prec
+            Prec=pres
+            #asyncio.create_task(device.builtin.rgbled.set(0,255,0,alpha,100))#RGBLED
+            print("Presence1:", pres)
+        await device.builtin.presence.set_callback(presence_cb)
 
         # enable I2C in standard mode
         await device.io.i2c.config(KonashiI2C.Config(True, KonashiI2C.Mode.STANDARD))
@@ -109,27 +110,52 @@ async def main(device):
             return btemp,l
         def tempsend(btemp):
             msg="体温は"+str(btemp)+"度だよ"
-            emo_send(msg,[255,0,0])
+            emo_send(msg)
         d=0
+        sendflag=False
+        tempsendflag=False
+        LEDflag=False
+        t1=Timer()
+        t2=Timer()
+        emo_send("体温管理を始めるね")
         while True:
             res, addr, data = await device.io.i2c.transaction(KonashiI2C.Operation.WRITE_READ, sens_addr, 3, [0x7])
             btemp,l=readbodyTemo(bt,res,data)
-            if btemp!=-1:
+            if btemp!=-1 and l<=3:
                 d=1
+            elif LEDflag:
+                d=2
             else:
                 d=0
-
+            if btemp==-1:
+                tempsendflag=False
             if button:
                 if  btemp!=-1 and l>3:
                     tempsend(btemp)
                     button=False
-            elif btemp!=-1 and l>3:
+            elif btemp!=-1 and l<=1:
+                emo_send("",[255,0,0])
+            elif btemp!=-1 and l>3 and not tempsendflag:
                 tempsend(btemp)
+                tempsendflag=True
+            elif Prec and not sendflag:
+                emo_send("体温を計測してね")
+                t1.reset()
+                t2.reset()
+                sendflag=True
+                LEDflag=True
+            elif not Prec:
+                if t1.stand_by(1000):
+                    sendflag=False
+
+            if t2.stand_by(3):
+                LEDflag=False
 
             await device.builtin.rgbled.set(RGB[d][0],RGB[d][1],RGB[d][2],alpha,100)
             await asyncio.sleep(1)
     except (asyncio.CancelledError, KeyboardInterrupt):
         logging.info("Stop loop")
+        emo_send("体温管理を終了するね")
         END=True
         await device.builtin.rgbled.set(RGB[d][0],RGB[d][1],RGB[d][2],0,1)
     finally:
